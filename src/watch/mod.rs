@@ -9,13 +9,15 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot, watch};
 
+type Table = HashMap<u8, (watch::Sender<bool>, watch::Receiver<bool>)>;
 pub struct Registry {
-    table: Arc<RwLock<HashMap<u8, (watch::Sender<bool>, watch::Receiver<bool>)>>>,
+    table: Arc<RwLock<Table>>,
 }
 
 pub type Subscription = (u8, oneshot::Sender<watch::Receiver<bool>>);
 
 impl Registry {
+    #[must_use]
     pub fn from_ids(ids: &[u8]) -> Self {
         let table = ids.iter().map(|id| (*id, watch::channel(true))).collect();
         Self {
@@ -23,7 +25,24 @@ impl Registry {
         }
     }
 
-    pub async fn run(self, mut subscribe: mpsc::Receiver<Subscription>) {
+    /// Get a watch channel for the given id.
+    pub async fn subscribe(
+        id: u8,
+        subscribe_tx: mpsc::Sender<Subscription>,
+    ) -> watch::Receiver<bool> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        subscribe_tx.send((id, reply_tx)).await.unwrap();
+        reply_rx.await.unwrap()
+    }
+
+    #[must_use = "The sender handle must be used to subscribe to IDs"]
+    pub fn spawn(self) -> mpsc::Sender<Subscription> {
+        let (subscribe_tx, subscribe_rx) = mpsc::channel(64);
+        tokio::spawn(self.run(subscribe_rx));
+        subscribe_tx
+    }
+
+    async fn run(self, mut subscribe: mpsc::Receiver<Subscription>) {
         let (done_tx, mut done_rx) = mpsc::channel(1);
         loop {
             tokio::select! {
@@ -70,16 +89,6 @@ impl Registry {
                 .send(true)
                 .unwrap();
         }
-    }
-
-    /// Get a watch channel for the given id.
-    pub async fn subscribe(
-        id: u8,
-        subscribe_tx: mpsc::Sender<Subscription>,
-    ) -> watch::Receiver<bool> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        subscribe_tx.send((id, reply_tx)).await.unwrap();
-        reply_rx.await.unwrap()
     }
 }
 

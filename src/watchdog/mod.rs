@@ -25,13 +25,15 @@ pub struct Watchdog {
 
 impl Watchdog {
     /// Make a watchdog with the given timeout duration.
-    pub fn with_timeout(duration: Duration) -> Self {
+    #[must_use]
+    pub const fn with_timeout(duration: Duration) -> Self {
         Self { duration }
     }
 
     /// Spawn the watchdog actor.
     ///
     /// Returns the `reset_tx` and `elapsed_rx` needed for communicating with the watchdog.
+    #[must_use]
     pub fn spawn(self) -> (mpsc::Sender<Reset>, oneshot::Receiver<Elapsed>) {
         let (reset_tx, reset_rx) = mpsc::channel(16);
         let (elapsed_tx, elapsed_rx) = oneshot::channel();

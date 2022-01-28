@@ -5,9 +5,7 @@ use tokio::sync::mpsc;
 async fn flow() {
     let ids = vec![1, 2, 3, 4];
     let registry = Registry::from_ids(&ids);
-    let (subscribe_tx, subscribe_rx) = mpsc::channel(1);
-
-    let _registry = tokio::spawn(registry.run(subscribe_rx));
+    let subscribe_tx = registry.spawn();
 
     let h2 = tokio::spawn(subscribe_then_wait_until_changed(2, subscribe_tx.clone()));
 
