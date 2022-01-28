@@ -2,53 +2,53 @@
 mod test;
 
 use rand::Rng;
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::{collections::HashMap, time::Duration};
 use tokio::sync::{mpsc, oneshot, watch};
 
-type Table = HashMap<u8, (watch::Sender<bool>, watch::Receiver<bool>)>;
-pub struct Registry {
-    table: Arc<RwLock<Table>>,
+type Table<T> = HashMap<T, (watch::Sender<bool>, watch::Receiver<bool>)>;
+pub struct Registry<T> {
+    table: Table<T>,
 }
 
-pub type Subscription = (u8, oneshot::Sender<watch::Receiver<bool>>);
+#[derive(Debug)]
+pub enum Request<T> {
+    Subscribe(T, oneshot::Sender<watch::Receiver<bool>>),
+    Trigger(T),
+}
 
-impl Registry {
+impl<T> Registry<T>
+where
+    T: std::fmt::Debug + Default + Copy + Eq + std::hash::Hash + Send + Sync + 'static,
+{
     #[must_use]
-    pub fn from_ids(ids: &[u8]) -> Self {
+    pub fn from_ids(ids: &[T]) -> Self {
         let table = ids.iter().map(|id| (*id, watch::channel(true))).collect();
-        Self {
-            table: Arc::new(RwLock::new(table)),
-        }
+        Self { table }
     }
 
     /// Get a watch channel for the given id.
-    pub async fn subscribe(
-        id: u8,
-        subscribe_tx: mpsc::Sender<Subscription>,
-    ) -> watch::Receiver<bool> {
+    pub async fn subscribe(id: T, request: &mpsc::Sender<Request<T>>) -> watch::Receiver<bool> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        subscribe_tx.send((id, reply_tx)).await.unwrap();
+        request
+            .send(Request::Subscribe(id, reply_tx))
+            .await
+            .unwrap();
         reply_rx.await.unwrap()
     }
 
-    #[must_use = "The sender handle must be used to subscribe to IDs"]
-    pub fn spawn(self) -> mpsc::Sender<Subscription> {
-        let (subscribe_tx, subscribe_rx) = mpsc::channel(64);
-        tokio::spawn(self.run(subscribe_rx));
-        subscribe_tx
+    #[must_use]
+    pub fn spawn(self) -> mpsc::Sender<Request<T>> {
+        let (request_tx, request_rx) = mpsc::channel(64);
+        tokio::spawn(self.run(request_rx));
+        request_tx
     }
 
-    async fn run(self, mut subscribe: mpsc::Receiver<Subscription>) {
+    async fn run(self, mut request: mpsc::Receiver<Request<T>>) {
         let (done_tx, mut done_rx) = mpsc::channel(1);
         loop {
             tokio::select! {
-                Some((id, reply)) = subscribe.recv() => {
-                    let watch = self.start_operation(id, done_tx.clone()).await;
-                    reply.send(watch).unwrap();
+                Some(request) = request.recv() => {
+                    self.handle_request(request, done_tx.clone()).await;
                 },
                 Some(id) = done_rx.recv() => {
                     self.mark_done(id).await;
@@ -58,41 +58,40 @@ impl Registry {
         }
     }
 
-    async fn start_operation(&self, id: u8, on_stop: mpsc::Sender<u8>) -> watch::Receiver<bool> {
-        // Reset state to false if it is true
-        // Then spawn operation
-        if *self.table.read().unwrap().get(&id).unwrap().1.borrow() {
-            self.table
-                .read()
-                .unwrap()
-                .get(&id)
-                .unwrap()
-                .0
-                .send(false)
-                .unwrap();
-            let watch = self.table.read().unwrap().get(&id).unwrap().1.clone();
-            tokio::spawn(some_operation(id, on_stop));
-            return watch;
+    async fn handle_request(&self, request: Request<T>, done_tx: mpsc::Sender<T>) {
+        match request {
+            Request::Subscribe(id, reply) => {
+                let watch = self.table.get(&id).unwrap().1.clone();
+                self.start_operation(id, done_tx.clone()).await;
+                reply.send(watch).unwrap();
+            }
+            Request::Trigger(id) => {
+                self.start_operation(id, done_tx.clone()).await;
+            }
         }
-        self.table.read().unwrap().get(&id).unwrap().1.clone()
     }
 
-    async fn mark_done(&self, id: u8) {
-        let state = *self.table.read().unwrap().get(&id).unwrap().1.borrow();
+    /// Start operation, unless already started.
+    /// When finished, operation will send `id` on `on_stop`.
+    async fn start_operation(&self, id: T, on_stop: mpsc::Sender<T>) {
+        // Reset state to false if it is true
+        // Then spawn operation
+        let state = *self.table.get(&id).unwrap().1.borrow();
+        if state {
+            self.table.get(&id).unwrap().0.send(false).unwrap();
+            tokio::spawn(some_operation(id, on_stop));
+        }
+    }
+
+    async fn mark_done(&self, id: T) {
+        let state = *self.table.get(&id).unwrap().1.borrow();
         if !state {
-            self.table
-                .read()
-                .unwrap()
-                .get(&id)
-                .unwrap()
-                .0
-                .send(true)
-                .unwrap();
+            self.table.get(&id).unwrap().0.send(true).unwrap();
         }
     }
 }
 
-pub async fn some_operation(id: u8, on_stop: mpsc::Sender<u8>) {
+pub async fn some_operation<T>(id: T, on_stop: mpsc::Sender<T>) {
     tokio::time::sleep(random_delay()).await;
     let _ = on_stop.send(id).await;
 }
