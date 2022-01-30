@@ -23,6 +23,7 @@ pub async fn until_message_panic_happy(
         Some(char) = chars.recv() => {
             Message::SomeChar(char)
         },
+        // no else branch.
     }
 }
 
