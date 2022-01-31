@@ -1,4 +1,4 @@
-use crate::watch::error::Error;
+use crate::registry::error::Error;
 
 use super::{Registry, Request};
 use tokio::sync::mpsc;
