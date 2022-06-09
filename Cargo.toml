@@ -7,6 +7,6 @@ edition = "2021"
 tokio-test = "0.4.2"
 
 [dependencies]
-rand = "0.8.4"
-thiserror = "1.0.30"
-tokio = { version = "1.15.0", features = ["full"] }
+rand = "0.8.5"
+thiserror = "1.0.31"
+tokio = { version = "1.19.2", features = ["full"] }
