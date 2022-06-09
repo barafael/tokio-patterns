@@ -131,7 +131,6 @@ where
             }
         } else {
             println!("Got announcement for completion of operation for non-existent ID");
-            return;
         };
     }
 }
